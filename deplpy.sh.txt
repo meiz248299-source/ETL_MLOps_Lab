@@ -1,0 +1,35 @@
+#!/bin/bash
+# Deployment script for ETL_MLOps pipeline
+
+echo "========================================"
+echo "Deploying ETL_MLOps Pipeline"
+echo "========================================"
+
+# 1. Pull latest code
+echo "[1/5] Pulling latest code..."
+git pull origin main
+
+# 2. Activate virtual environment
+echo "[2/5] Activating virtual environment..."
+source venv/bin/activate
+
+# 3. Install dependencies
+echo "[3/5] Installing dependencies..."
+pip install -r requirements.txt
+
+# 4. Run tests
+echo "[4/5] Running tests..."
+pytest tests/ -v
+
+# 5. Deploy with Docker
+echo "[5/5] Deploying with Docker..."
+docker-compose down
+docker-compose up -d
+
+echo "========================================"
+echo "Deployment complete!"
+echo "API: http://localhost:8000"
+echo "Docs: http://localhost:8000/docs"
+echo "MLflow: http://localhost:5000"
+echo "Grafana: http://localhost:3000"
+echo "========================================"

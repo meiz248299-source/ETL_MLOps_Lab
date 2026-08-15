@@ -1,0 +1,172 @@
+version: '3.8'
+
+services:
+  # ===== 数据存储层 =====
+  
+  postgres:
+    image: postgres:15-alpine
+    container_name: mlops-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mlops_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlops_password}
+      POSTGRES_DB: ${POSTGRES_DB:-mlops_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mlops_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - mlops-network
+
+  # ===== 实验追踪层 =====
+  
+  mlflow:
+    image: python:3.9-slim
+    container_name: mlops-mlflow
+    working_dir: /mlflow
+    command: >
+      sh -c "pip install mlflow psycopg2-binary &&
+             mlflow server --host 0.0.0.0 --port 5000
+             --backend-store-uri postgresql://${POSTGRES_USER:-mlops_user}:${POSTGRES_PASSWORD:-mlops_password}@postgres/${POSTGRES_DB:-mlops_db}"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - mlops-network
+
+  # ===== 模型服务层 =====
+  
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: mlops-api
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-mlops_user}:${POSTGRES_PASSWORD:-mlops_password}@postgres:5432/${POSTGRES_DB:-mlops_db}
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MODEL_PATH=/app/models/model_latest.joblib
+      - MODEL_VERSION=${MODEL_VERSION:-1.0.0}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - mlops-network
+
+  # ===== 监控层 =====
+  
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: mlops-postgres-exporter
+    environment:
+      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-mlops_user}:${POSTGRES_PASSWORD:-mlops_password}@postgres:5432/${POSTGRES_DB:-mlops_db}?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - mlops-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mlops-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerting_rules.yml:/etc/prometheus/alerting_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - api
+      - postgres_exporter
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - mlops-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mlops-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - mlops-network
+
+  # ===== 编排层 =====
+  
+  airflow:
+    image: apache/airflow:2.7.0
+    container_name: mlops-airflow
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql://${POSTGRES_USER:-mlops_user}:${POSTGRES_PASSWORD:-mlops_password}@postgres/${POSTGRES_DB:-mlops_db}
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY:-your_secret_key}
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./models:/opt/airflow/models
+      - ./data:/opt/airflow/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "airflow db init &&
+             airflow users create -u admin -p ${AIRFLOW_PASSWORD:-admin} -f admin -l admin -r Admin -e admin@example.com 2>/dev/null || true &&
+             airflow webserver -p 8080"
+    restart: unless-stopped
+    networks:
+      - mlops-network
+
+# ===== 网络 =====
+networks:
+  mlops-network:
+    driver: bridge
+
+# ===== 持久化卷 =====
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
