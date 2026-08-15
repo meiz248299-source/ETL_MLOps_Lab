@@ -1,4 +1,8 @@
-# src/load/db_loader.py
+"""
+Database Loader
+Purpose: Load transformed data into relational databases using SQLAlchemy
+"""
+
 from sqlalchemy import create_engine
 import pandas as pd
 from typing import Optional, Dict
@@ -7,53 +11,59 @@ import logging
 logger = logging.getLogger(__name__)
 
 class DatabaseLoader:
+    """
+    Loads data into databases with batch support
+    """
+    
     def __init__(self, connection_string: str):
         """
-        初始化数据库加载器
+        Initialize database loader
         
-        参数:
-        - connection_string: 数据库连接字符串
+        Args:
+            connection_string: Database connection URL
+            Example: postgresql://user:password@localhost:5432/database
         """
         self.engine = create_engine(connection_string)
     
     def load_dataframe(self, df: pd.DataFrame, table_name: str, 
                        if_exists: str = 'replace', 
-                       index: bool = False) -> None:
+                       index: bool = False,
+                       dtype: Optional[Dict] = None) -> None:
         """
-        加载DataFrame到数据库
+        Load DataFrame to database table
         
-        作用:
-        - 将数据写入数据库表
-        - if_exists参数控制写入方式:
-          * replace: 删除并重新创建表
-          * append: 追加到现有表
-          * fail: 表存在时报错
+        Purpose:
+        - Save processed data to database
         
-        注意事项:
-        - 大量数据时可能较慢
-        - 考虑分批次加载
+        if_exists options:
+        - replace: Drop and recreate table
+        - append: Add to existing table
+        - fail: Raise error if table exists
+        
+        Why SQLAlchemy?
+        - Works with multiple database backends
+        - Handles connection pooling
+        - Provides ORM capabilities
         """
-        logger.info(f"加载{len(df)}行数据到表{table_name}")
-        df.to_sql(table_name, self.engine, if_exists=if_exists, index=index)
-        logger.info(f"成功加载数据到{table_name}")
+        logger.info(f"Loading {len(df)} rows to table {table_name}")
+        df.to_sql(table_name, self.engine, if_exists=if_exists, 
+                  index=index, dtype=dtype)
+        logger.info(f"Successfully loaded data to {table_name}")
     
-    def load_batch(self, df_iterator, table_name: str, batch_size: int = 5000) -> None:
+    def load_batch(self, df_iterator, table_name: str, 
+                   batch_size: int = 5000) -> None:
         """
-        批量加载数据
+        Load data in batches for large datasets
         
-        作用:
-        - 分批写入，避免内存不足
-        - 第1批使用replace，后续使用append
-        - 适合非常大的数据集
-        
-        优势:
-        - 内存友好
-        - 可恢复性 (如果中途失败，已写入的数据不会丢失)
+        Purpose:
+        - Handle large datasets without memory issues
+        - First batch creates table, subsequent batches append
+        - Resumable if interrupted
         """
-        logger.info(f"以{batch_size}为批次加载数据到{table_name}")
+        logger.info(f"Loading data to {table_name} in batches of {batch_size}")
         
         for i, df_batch in enumerate(df_iterator):
             df_batch.to_sql(table_name, self.engine, 
                           if_exists='append' if i > 0 else 'replace', 
                           index=False)
-            logger.info(f"已加载批次 {i+1}: {len(df_batch)} 行")
+            logger.info(f"Loaded batch {i+1}: {len(df_batch)} rows")

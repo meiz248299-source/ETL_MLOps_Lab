@@ -1,0 +1,57 @@
+"""
+Logging Configuration
+Purpose: Implement logging mechanisms to track errors and monitor pipeline performance
+"""
+
+import logging
+import json
+from datetime import datetime
+import structlog
+
+def setup_logging():
+    """
+    Configure structured logging for the application
+    
+    Purpose:
+    - Track errors and warnings
+    - Monitor pipeline performance
+    - Provide audit trail
+    
+    Structured logging benefits:
+    - Machine-readable format (JSON)
+    - Easy to parse and analyze
+    - Works with log aggregation tools
+    """
+    
+    # Configure structlog
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+            structlog.processors.JSONRenderer()
+        ],
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+    
+    # Configure standard logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Add file handler
+    file_handler = logging.FileHandler('logs/mlops.log')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    ))
+    logging.getLogger().addHandler(file_handler)
+    
+    return structlog.get_logger()

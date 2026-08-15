@@ -1,0 +1,100 @@
+"""
+S3 Loader
+Purpose: Load transformed data into AWS S3 cloud storage
+"""
+
+import boto3
+import pandas as pd
+from io import StringIO, BytesIO
+from typing import Optional
+import logging
+import json
+
+logger = logging.getLogger(__name__)
+
+class S3Loader:
+    """
+    Loads data to AWS S3 with partition support
+    """
+    
+    def __init__(self, bucket_name: str, region: str = 'us-east-1',
+                 access_key: Optional[str] = None, 
+                 secret_key: Optional[str] = None):
+        """
+        Initialize S3 loader
+        
+        Args:
+            bucket_name: S3 bucket name
+            region: AWS region
+            access_key: AWS access key (or use environment)
+            secret_key: AWS secret key (or use environment)
+        """
+        self.bucket_name = bucket_name
+        self.s3 = boto3.client(
+            's3',
+            region_name=region,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key
+        )
+    
+    def load_dataframe_csv(self, df: pd.DataFrame, key: str) -> None:
+        """
+        Load DataFrame as CSV to S3
+        
+        Purpose:
+        - Save data in human-readable format
+        - Good for small to medium datasets
+        """
+        logger.info(f"Loading {len(df)} rows to s3://{self.bucket_name}/{key}")
+        
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        
+        self.s3.put_object(
+            Bucket=self.bucket_name,
+            Key=key,
+            Body=csv_buffer.getvalue()
+        )
+        logger.info(f"Successfully loaded data to S3")
+    
+    def load_dataframe_parquet(self, df: pd.DataFrame, key: str) -> None:
+        """
+        Load DataFrame as Parquet to S3
+        
+        Purpose:
+        - Save data in compressed columnar format
+        - Better performance for querying
+        - Smaller storage footprint
+        """
+        logger.info(f"Loading {len(df)} rows as parquet to s3://{self.bucket_name}/{key}")
+        
+        parquet_buffer = BytesIO()
+        df.to_parquet(parquet_buffer, index=False)
+        parquet_buffer.seek(0)
+        
+        self.s3.put_object(
+            Bucket=self.bucket_name,
+            Key=key,
+            Body=parquet_buffer.getvalue()
+        )
+        logger.info(f"Successfully loaded parquet data to S3")
+    
+    def load_partitioned(self, df: pd.DataFrame, partition_col: str, 
+                         base_key: str) -> None:
+        """
+        Load data partitioned by a column
+        
+        Purpose:
+        - Organize data by date or category for efficient querying
+        - Enables partition pruning for faster queries
+        - Supports Hive-style partitioning
+        
+        Example: base_key=date=2024-01-01/data.parquet
+        """
+        logger.info(f"Loading partitioned data by {partition_col}")
+        
+        for partition_value, group in df.groupby(partition_col):
+            partition_key = f"{base_key}/{partition_col}={partition_value}/data.parquet"
+            self.load_dataframe_parquet(group, partition_key)
+        
+        logger.info("Completed partitioned load")
